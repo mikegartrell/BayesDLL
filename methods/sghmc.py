@@ -53,7 +53,7 @@ class Runner:
         self.optimizer = torch.optim.SGD(
             [{'params': [p for pn, p in self.net.named_parameters() if self.net.readout_name not in pn], 'lr': args.lr},
              {'params': [p for pn, p in self.net.named_parameters() if self.net.readout_name in pn], 'lr': args.lr_head}],
-            momentum = args.momentum, weight_decay = 0
+            momentum = 0, weight_decay = 0 # Disable momemtum here, since we manage it manually for SGHMC
         )
 
         # TODO: create scheduler?
