@@ -57,7 +57,8 @@ class Runner:
         )
 
         # TODO: create scheduler?
-        self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.5)
+        # self.scheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=5, gamma=0.5)
+        # self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=0.1, patience=1, threshold=1e-3, threshold_mode='abs')
 
         self.criterion = torch.nn.CrossEntropyLoss()
 
@@ -107,12 +108,17 @@ class Runner:
             losses_train[ep], errors_train[ep], bi = self.train_one_epoch(
                 train_loader, collect=(ep>=self.burnin), bi=bi
             )
-            self.scheduler.step()  # update learning rate
+
+            # Only reduce LR if the current LR is above a threshold
+            # if self.scheduler.get_last_lr()[0] > 1e-5:
+            #     self.scheduler.step()
+            # self.scheduler.step(errors_train[ep])  # update learning rate
+            
             toc = time.time()
 
             prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
             prn_str += 'loss = %.4f, prediction error = %.4f ' % (losses_train[ep], errors_train[ep])
-            prn_str += 'lr = %.4f ' % self.scheduler.get_lr()[0]
+            # prn_str += 'lr = %.5f ' % self.scheduler.get_last_lr()[0]
             prn_str += '(time: %.4f seconds)' % (toc-tic,)
             logger.info(prn_str)
 
@@ -129,6 +135,8 @@ class Runner:
                     prn_str += 'loss = %.4f, prediction error = %.4f ' % (losses_val[ep], errors_val[ep])
                     prn_str += '(time: %.4f seconds)' % (toc-tic,)
                     logger.info(prn_str)
+
+                    # self.scheduler.step(losses_val[ep])  # update learning rate
 
                 # test on test set
                 tic = time.time()
