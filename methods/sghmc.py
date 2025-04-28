@@ -500,7 +500,7 @@ class Model(nn.Module):
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using SGHMC update rule
-                    v = v * (1 - self.momentum_decay) - lr * grad_U + noise
+                    v = v * (1 - self.momentum_decay) + lr * grad_U + noise
                     
                     # Store updated momentum
                     self.momentum_buffer[pname] = v
