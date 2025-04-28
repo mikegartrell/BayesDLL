@@ -44,7 +44,14 @@ parser.add_argument('--test_eval_freq', type=int, default=1, help='do test evalu
 args = parser.parse_args()
 
 
-args.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+if torch.cuda.is_available():
+    args.device = torch.device('cuda')
+elif torch.backends.mps.is_available():
+    args.device = torch.device('mps')
+else:
+    args.device = torch.device('cpu')
+
+# args.device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 args.use_cuda = torch.cuda.is_available()
 
 # random seed
@@ -144,6 +151,13 @@ elif args.method == 'la':
 
     runner = Runner(net, net0, args, logger)
     runner.train(train_loader, val_loader, test_loader)
+
+elif args.method == 'sghmc':
+    if __name__ == '__main__':
+        from methods.sghmc import Runner
+
+        runner = Runner(net, net0, args, logger)
+        runner.train(train_loader, val_loader, test_loader)
 
 else:
     raise NotImplementedError
