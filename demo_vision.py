@@ -159,6 +159,13 @@ elif args.method == 'sghmc':
         runner = Runner(net, net0, args, logger)
         runner.train(train_loader, val_loader, test_loader)
 
+elif args.method == 'adam_sghmc':
+    if __name__ == '__main__':
+        from methods.adam_sghmc import Runner
+
+        runner = Runner(net, net0, args, logger)
+        runner.train(train_loader, val_loader, test_loader)
+
 else:
     raise NotImplementedError
 
