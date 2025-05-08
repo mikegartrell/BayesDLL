@@ -61,7 +61,6 @@ class Runner:
         )
 
         # TODO: create scheduler?
-       
         self.criterion = torch.nn.CrossEntropyLoss()
 
         self.Ninflate = float(hparams['Ninflate'])  # N inflation factor (factor in data augmentation)
@@ -75,6 +74,15 @@ class Runner:
 
         args = self.args
         logger = self.logger
+
+        num_epochs = args.epochs
+        steps_per_epoch = len(train_loader)
+        total_steps = num_epochs * steps_per_epoch
+        logger.info('Total training steps: %d' % total_steps)
+        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=total_steps, eta_min=1e-6
+        )
+       
 
         logger.info('Start training...')
 
@@ -115,7 +123,7 @@ class Runner:
 
             prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
             prn_str += 'loss = %.4f, prediction error = %.4f ' % (losses_train[ep], errors_train[ep])
-            # prn_str += 'lr = %.5f ' % self.scheduler.get_last_lr()[0]
+            prn_str += 'lr = %.7f ' % self.scheduler.get_last_lr()[0]
             prn_str += '(time: %.4f seconds)' % (toc-tic,)
             logger.info(prn_str)
 
@@ -253,6 +261,8 @@ class Runner:
                     self.post_theta_cnt += 1
 
                 tepoch.set_postfix(loss=loss/nb_samples, error=error/nb_samples)
+
+                self.scheduler.step()  # update learning rate
 
         return loss/nb_samples, error/nb_samples, bi
 
