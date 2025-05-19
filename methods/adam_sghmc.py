@@ -79,11 +79,13 @@ class Runner:
         steps_per_epoch = len(train_loader)
         total_steps = num_epochs * steps_per_epoch
         logger.info('Total training steps: %d' % total_steps)
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=total_steps, eta_min=1e-6
-        )
-       
 
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=0.75, patience=5, min_lr=1e-6)
+
+        # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #     self.optimizer, T_max=total_steps, eta_min=1e-6
+        # )
+       
         logger.info('Start training...')
 
         epoch = 0
@@ -118,7 +120,10 @@ class Runner:
             losses_train[ep], errors_train[ep], bi = self.train_one_epoch(
                 train_loader, collect=(ep>=self.burnin), bi=bi
             )
-            
+
+            # losses_val[ep], errors_val[ep], targets_val, logits_val, logits_all_val = \
+            #     self.evaluate(val_loader)
+
             toc = time.time()
 
             prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
@@ -126,6 +131,8 @@ class Runner:
             prn_str += 'lr = %.7f ' % self.scheduler.get_last_lr()[0]
             prn_str += '(time: %.4f seconds)' % (toc-tic,)
             logger.info(prn_str)
+
+            self.scheduler.step(losses_train[ep])
 
             # test evaluation (only after burnin period)
             if ep % args.test_eval_freq == 0 and ep >= self.burnin:
@@ -262,7 +269,7 @@ class Runner:
 
                 tepoch.set_postfix(loss=loss/nb_samples, error=error/nb_samples)
 
-                self.scheduler.step()  # update learning rate
+                # self.scheduler.step()  # update learning rate
 
         return loss/nb_samples, error/nb_samples, bi
 
