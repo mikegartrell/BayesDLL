@@ -54,10 +54,11 @@ class Runner:
         #     self.net.parameters(), 
         #     lr = args.lr, momentum = args.momentum, weight_decay = 0
         # )
+        # Force SGD optimizer momentum to 0, since momentum is handled in Adam-SGHMC
         self.optimizer = torch.optim.SGD(
             [{'params': [p for pn, p in self.net.named_parameters() if self.net.readout_name not in pn], 'lr': args.lr},
              {'params': [p for pn, p in self.net.named_parameters() if self.net.readout_name in pn], 'lr': args.lr_head}],
-            momentum = args.momentum, weight_decay = 0
+            momentum = 0, weight_decay = 0
         )
 
         # TODO: create scheduler?
@@ -79,8 +80,6 @@ class Runner:
         steps_per_epoch = len(train_loader)
         total_steps = num_epochs * steps_per_epoch
         logger.info('Total training steps: %d' % total_steps)
-
-        # self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, factor=0.75, patience=5, min_lr=1e-6)
 
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optimizer, T_max=total_steps, eta_min=1e-6
