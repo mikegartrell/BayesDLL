@@ -19,6 +19,22 @@ def create_backbone(args):
 
         net.readout_name = 'classifier'
 
+    elif args.backbone == 'resnet18':
+        # randomly initialized network
+        net = torchvision.models.resnet18()
+
+        # replace the final readout layer
+        net.fc = nn.Linear(512, args.num_classes)
+        
+        # randomly initialize readout layer
+        for p in net.fc.parameters():
+            if len(p.shape) > 1:
+                nn.init.kaiming_normal_(p, nonlinearity='relu')
+            else:
+                nn.init.zeros_(p)
+        
+        net.readout_name = 'fc'
+
     elif args.backbone == 'resnet101':
 
         # randomly initialized network
@@ -72,6 +88,30 @@ def load_pretrained_backbone(args, zero_head=True):
         zero_head = if True, we zero out the final prediction layer (aka head or readout)
                     if False, head is random initialised
     '''
+
+    if args.backbone == 'resnet18':
+
+        # create a pretrained network
+        if args.pretrained == 'IMAGENET1K_V1':
+            weights = torchvision.models.ResNet18_Weights.IMAGENET1K_V1
+        else:
+            raise NotImplementedError
+        net = torchvision.models.resnet101(weights=weights)
+
+        # replace the final readout layer
+        net.fc = nn.Linear(512, args.num_classes)
+        
+        if zero_head:  # zero-initialize readout layer
+            for p in net.fc.parameters():
+                nn.init.zeros_(p)
+        else:  # randomly initialize readout layer
+            for p in net.fc.parameters():
+                if len(p.shape) > 1:
+                    nn.init.kaiming_normal_(p, nonlinearity='relu')
+                else:
+                    nn.init.zeros_(p)
+
+        net.readout_name = 'fc'
 
     if args.backbone == 'resnet101':
 
