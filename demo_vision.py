@@ -41,6 +41,8 @@ parser.add_argument('--seed', type=int, default=42, help='random seed')
 parser.add_argument('--log_dir', type=str, default='results', help='root folder for saving logs')
 parser.add_argument('--test_eval_freq', type=int, default=1, help='do test evaluation (every this epochs)')
 
+parser.add_argument('--train_data_aug', default=True, action=argparse.BooleanOptionalAction)
+
 args = parser.parse_args()
 
 
@@ -100,7 +102,7 @@ logger.info(f"Command :: {cmd}\n")
 
 # prepare data
 logger.info('Preparing data...')
-train_loader, val_loader, test_loader, args.ND = datasets.prepare(args)  # ND = train set size
+train_loader, val_loader, test_loader, args.ND = datasets.prepare(args, train_data_aug=args.train_data_aug)  # ND = train set size
 
 # create backbone (skeleton)
 logger.info('Creating an underlying backbone network (skeleton)...')
