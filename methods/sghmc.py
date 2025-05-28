@@ -116,11 +116,14 @@ class Runner:
             losses_train[ep], errors_train[ep], bi = self.train_one_epoch(
                 train_loader, collect=(ep>=self.burnin), bi=bi
             )
+
+            losses_val[ep], errors_val[ep] = self.compute_validation_metrics(val_loader)
             
             toc = time.time()
 
             prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
-            prn_str += 'loss = %.4f, prediction error = %.4f ' % (losses_train[ep], errors_train[ep])
+            prn_str += 'loss = %.4f, prediction error = %.4f, ' % (losses_train[ep], errors_train[ep])
+            prn_str += 'val loss = %.4f, val prediction error = %.4f, ' % (losses_val[ep], errors_val[ep])
             prn_str += 'lr = %.7f ' % self.scheduler.get_last_lr()[0]
             prn_str += '(time: %.4f seconds)' % (toc-tic,)
             logger.info(prn_str)
@@ -264,6 +267,57 @@ class Runner:
 
         return loss/nb_samples, error/nb_samples, bi
 
+    def compute_validation_metrics(self, val_loader):
+        '''
+        Standalone function to compute validation metrics for any network.
+        
+        Args:
+            val_loader: Validation data loader
+        "        
+        Returns:
+            tuple: (average_loss, average_error)
+        '''
+
+        args = self.args
+
+        net = copy.deepcopy(self.net)  # workhorse network for this evaluation
+
+        net.eval()
+        
+        total_loss = 0.0
+        total_error = 0
+        total_samples = 0
+        
+        with torch.no_grad():
+            with tqdm(val_loader, unit="batch", desc="Validation") as tepoch:
+                for x, y in tepoch:
+                    x, y = x.to(args.device), y.to(args.device)
+                    
+                    # Forward pass
+                    logits = net(x)
+                    
+                    # Compute loss
+                    loss = self.criterion(logits, y)
+                    
+                    # Compute predictions and errors
+                    pred = logits.max(dim=1)[1]
+                    error_count = pred.ne(y.data).sum().item()
+                    
+                    # Accumulate metrics
+                    batch_size = len(y)
+                    total_loss += loss.item() * batch_size
+                    total_error += error_count
+                    total_samples += batch_size
+                    
+                    # Update progress bar
+                    current_avg_loss = total_loss / total_samples
+                    current_avg_error = total_error / total_samples
+                    tepoch.set_postfix(loss=current_avg_loss, error=current_avg_error)
+        
+        average_loss = total_loss / total_samples
+        average_error = total_error / total_samples
+        
+        return average_loss, average_error
 
     def evaluate(self, test_loader):
 
