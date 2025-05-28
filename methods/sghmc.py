@@ -42,7 +42,8 @@ class Runner:
         # create Hamiltonian mcmc model (nn.Module with actually no parameters)
         hparams = args.hparams
         self.model = Model(
-            ND=args.ND, prior_sig=float(hparams['prior_sig']), bias=str(hparams['bias']), momentum_decay=float(hparams['momentum_decay'])
+            ND=args.ND, prior_sig=float(hparams['prior_sig']), bias=str(hparams['bias']), momentum_decay=float(hparams['momentum_decay']),
+            temperature=float(hparams.get('temperature', 1.0))  # Cold posterior temperature
         ).to(args.device)
 
         # create optimizer (for workhorse network -- to update SGHMC sample)
@@ -442,7 +443,8 @@ class Runner:
                 'post_theta_mom1': self.post_theta_mom1,  
                 'post_theta_mom2': self.post_theta_mom2 if self.nst>0 else None, 
                 'post_theta_cnt': self.post_theta_cnt, 
-                'prior_sig': self.model.prior_sig, 
+                'prior_sig': self.model.prior_sig,
+                'temperature': self.model.temperature,  # Save temperature parameter
                 'optimizer': self.optimizer.state_dict(),
                 'momentum_buffer': self.model.momentum_buffer,  # Save SGHMC momentum state
                 'epoch': epoch, 
@@ -463,6 +465,10 @@ class Runner:
         self.post_theta_cnt = ckpt['epoch']
         self.model.prior_sig = ckpt['prior_sig']
 
+        # Load temperature if available (backward compatibility)
+        if 'temperature' in ckpt:
+            self.model.temperature = ckpt['temperature']
+
         if 'momentum_buffer' in ckpt:
             self.model.momentum_buffer = ckpt['momentum_buffer']  # Load SGHMC momentum state
 
@@ -479,7 +485,7 @@ class Model(nn.Module):
     Actually no parameters involved.
     '''
 
-    def __init__(self, ND, prior_sig=1.0, bias='informative', momentum_decay=0.05):
+    def __init__(self, ND, prior_sig=1.0, bias='informative', momentum_decay=0.05, temperature=1.0):
 
         '''
         Args:
@@ -488,6 +494,8 @@ class Model(nn.Module):
             bias = how to treat bias parameters:
                 "informative": -- the same treatment as weights
                 "uninformative": uninformative bias prior
+            momentum_decay = momentum decay parameter (alpha in SGHMC papers)
+            temperature = cold posterior temperature parameter (T)
         '''
 
         super().__init__()
@@ -496,6 +504,7 @@ class Model(nn.Module):
         self.prior_sig = prior_sig
         self.bias = bias
         self.momentum_decay = momentum_decay
+        self.temperature = temperature  # Cold posterior temperature
 
     def forward(self, x, y, net, net0, criterion, lrs, Ninflate=1.0, nd=1.0):
         '''
@@ -518,6 +527,7 @@ class Model(nn.Module):
         
         bias = self.bias
         N = self.ND * Ninflate  # inflated training data size (accounting for data augmentation, etc.)
+        T = self.temperature  # Cold posterior temperature
         if len(lrs) == 1:
             lr_body, lr_head = lrs[0], lrs[0]
         else:
@@ -555,14 +565,15 @@ class Model(nn.Module):
                     # Get momentum for this parameter
                     v = self.momentum_buffer[pname]
                     
-                    # Compute gradient term including prior
+                    # Compute gradient term including prior with cold posterior scaling
                     if 'bias' in pname and bias == 'uninformative':
-                        grad_U = p.grad  # Only data likelihood gradient
+                        grad_U = p.grad / T  # Scale likelihood gradient by 1/T
                     else:
-                        grad_U = p.grad + (p - p0) / (self.prior_sig**2) / N  # Prior + likelihood gradient
+                        # Scale both prior and likelihood gradients by 1/T
+                        grad_U = (p.grad + (p - p0) / (self.prior_sig**2) / N) / T  # Prior + likelihood gradient
                     
-                    # Noise term
-                    noise_scale = nd * np.sqrt(2 * self.momentum_decay / (N * lr))
+                     # Scale noise by sqrt(1/T) to maintain proper sampling from cold posterior
+                    noise_scale = nd * np.sqrt(2 * self.momentum_decay / (N * lr * T))
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using SGHMC update rule

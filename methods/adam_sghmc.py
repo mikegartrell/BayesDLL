@@ -46,7 +46,8 @@ class Runner:
             momentum_decay=float(hparams['momentum_decay']),
             beta1=float(hparams.get('beta1', 0.9)),  # Adam beta1 parameter
             beta2=float(hparams.get('beta2', 0.999)),  # Adam beta2 parameter
-            epsilon=float(hparams.get('epsilon', 1e-8))  # Adam epsilon parameter
+            epsilon=float(hparams.get('epsilon', 1e-8)),  # Adam epsilon parameter
+            temperature=float(hparams.get('temperature', 1.0))  # Cold posterior temperature
         ).to(args.device)
 
         # create optimizer (for workhorse network -- to update SGHMC sample)
@@ -448,6 +449,7 @@ class Runner:
                 'post_theta_mom2': self.post_theta_mom2 if self.nst>0 else None, 
                 'post_theta_cnt': self.post_theta_cnt, 
                 'prior_sig': self.model.prior_sig, 
+                'temperature': self.model.temperature,  # Save temperature parameter
                 'optimizer': self.optimizer.state_dict(),
                 'momentum_buffer': self.model.momentum_buffer,  # Save Adam-SGHMC momentum state
                 'm': self.model.m,  # Save Adam-SGHMC first moment
@@ -470,6 +472,10 @@ class Runner:
             self.post_theta_mom2 = ckpt['post_theta_mom2']
         self.post_theta_cnt = ckpt['epoch']
         self.model.prior_sig = ckpt['prior_sig']
+        
+        # Load temperature if available (backward compatibility)
+        if 'temperature' in ckpt:
+            self.model.temperature = ckpt['temperature']
 
         if 'momentum_buffer' in ckpt:
             self.model.momentum_buffer = ckpt['momentum_buffer']  # Load Adam-SGHMC momentum state
@@ -496,7 +502,7 @@ class Model(nn.Module):
     Actually no parameters involved.
     '''
 
-    def __init__(self, ND, prior_sig=1.0, bias='informative', momentum_decay=0.05, beta1=0.9, beta2=0.999, epsilon=1e-8):
+    def __init__(self, ND, prior_sig=1.0, bias='informative', momentum_decay=0.05, beta1=0.9, beta2=0.999, epsilon=1e-8, temperature=1.0):
 
         '''
         Args:
@@ -509,6 +515,7 @@ class Model(nn.Module):
             beta1 = Adam beta1 parameter (exponential decay rate for first moment)
             beta2 = Adam beta2 parameter (exponential decay rate for second moment)
             epsilon = small constant for numerical stability
+            temperature = cold posterior temperature parameter (T)
         '''
 
         super().__init__()
@@ -520,6 +527,7 @@ class Model(nn.Module):
         self.beta1 = beta1
         self.beta2 = beta2
         self.epsilon = epsilon
+        self.temperature = temperature  # Cold posterior temperature
         self.t = 0  # Initialize time step counter
 
     def forward(self, x, y, net, net0, criterion, lrs, Ninflate=1.0, nd=1.0):
@@ -542,6 +550,7 @@ class Model(nn.Module):
         
         bias = self.bias
         N = self.ND * Ninflate  # inflated training data size (accounting for data augmentation, etc.)
+        T = self.temperature  # Cold posterior temperature
         if len(lrs) == 1:
             lr_body, lr_head = lrs[0], lrs[0]
         else:
@@ -584,11 +593,12 @@ class Model(nn.Module):
                     m = self.m[pname]
                     v = self.v[pname]
                     
-                    # Compute gradient term including prior
+                    # Compute gradient term including prior with cold posterior scaling
                     if 'bias' in pname and bias == 'uninformative':
-                        grad_U = p.grad  # Only data likelihood gradient
+                        grad_U = p.grad / T  # Scale likelihood gradient by 1/T
                     else:
-                        grad_U = p.grad + (p - p0) / (self.prior_sig**2) / N  # Prior + likelihood gradient
+                        # Scale both prior and likelihood gradients by 1/T
+                        grad_U = (p.grad + (p - p0) / (self.prior_sig**2) / N) / T
                     
                     # Update biased first moment estimate (Adam)
                     m = self.beta1 * m + (1 - self.beta1) * grad_U
@@ -603,9 +613,10 @@ class Model(nn.Module):
                     # Compute preconditioned gradient
                     precond_grad = m_hat / (torch.sqrt(v_hat) + self.epsilon)
                     
-                    # Noise term for SGHMC with preconditioning
+                    # Noise term for SGHMC with preconditioning and temperature scaling
                     precond_term = 1.0 / (torch.sqrt(v_hat) + self.epsilon)
-                    noise_scale = nd * torch.sqrt(2 * self.momentum_decay * precond_term / N )
+                    # Scale noise by sqrt(1/T) to maintain proper sampling from cold posterior
+                    noise_scale = nd * torch.sqrt(2 * self.momentum_decay * precond_term / (N * T))
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using Adam-SGHMC update rule
@@ -620,4 +631,4 @@ class Model(nn.Module):
                     p.grad = p.grad + v_momentum.clone()
         
         return loss.item(), out.detach()
-
+    
