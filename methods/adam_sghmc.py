@@ -627,8 +627,8 @@ class Model(nn.Module):
                     self.m[pname] = m
                     self.v[pname] = v
                     
-                    # Update gradient using momentum
-                    p.grad = p.grad + v_momentum.clone()
+                    # Set gradient to momentum, for SGD optimizer to use
+                    p.grad = v_momentum.clone()
         
         return loss.item(), out.detach()
     

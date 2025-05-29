@@ -582,8 +582,8 @@ class Model(nn.Module):
                     # Store updated momentum
                     self.momentum_buffer[pname] = v
                     
-                    # Update gradient using momentum
-                    p.grad = p.grad + v.clone()
+                    # Set gradient to momentum, for SGD optimizer to use
+                    p.grad = v.clone()
         
         return loss.item(), out.detach()
 
