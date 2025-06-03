@@ -627,7 +627,7 @@ class Model(nn.Module):
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using Adam-SGHMC update rule
-                    v_momentum = v_momentum * (1 - self.momentum_decay) + lr * precond_grad + noise
+                    v_momentum = v_momentum * (1 - self.momentum_decay) - lr * precond_grad + noise
                     
                     # Store updated momentum and moment estimates
                     self.momentum_buffer[pname] = v_momentum
@@ -635,7 +635,7 @@ class Model(nn.Module):
                     self.v[pname] = v
                     
                     # Set gradient to momentum, for SGD optimizer to use
-                    p.grad = v_momentum.clone()
+                    p.grad = -v_momentum.clone()
         
         return loss.item(), out.detach()
     
