@@ -11,6 +11,8 @@ from optuna.samplers import TPESampler
 import tempfile
 import shutil
 from datetime import datetime
+import flash.core.optimizers
+import time
 
 # Import the necessary modules from your codebase
 import networks
@@ -55,7 +57,7 @@ def create_objective_function(base_args):
                     hparams_dict[key] = val
         
         # Update with trial hyperparameters
-        hparams_dict['momentum_decay'] = str(momentum)
+        hparams_dict['momentum_decay'] = str(momentum_decay)
         hparams_dict['temperature'] = str(temperature)
         hparams_dict['prior_sig'] = str(prior_sig)
         
@@ -72,7 +74,9 @@ def create_objective_function(base_args):
         args.hparams = hparams
         
         # Create temporary directory for this trial
-        trial_dir = tempfile.mkdtemp(prefix=f'optuna_trial_{trial.number}_')
+        # trial_dir = tempfile.mkdtemp(prefix=f'optuna_trial_{trial.number}_')
+        trial_dir = os.path.join(base_args.results_dir, f'optuna_trial_{args.study_name}_{trial.number}')
+        os.makedirs(trial_dir, exist_ok=True)
         args.log_dir = trial_dir
         
         try:
@@ -115,6 +119,17 @@ def create_objective_function(base_args):
                 original_epochs = args.epochs
                 # args.epochs = min(args.epochs, 75)  # Cap at 75 epochs for faster search
                 
+                num_epochs = args.epochs
+                steps_per_epoch = len(train_loader)
+                total_steps = num_epochs * steps_per_epoch
+                logger.info('Total training steps: %d' % total_steps)
+
+                num_warmup_epochs = args.warmup_epochs
+                warmup_steps = num_warmup_epochs * steps_per_epoch
+                logger.info('Total warmup steps: %d' % warmup_steps)
+
+                runner.scheduler = flash.core.optimizers.LinearWarmupCosineAnnealingLR(runner.optimizer, warmup_epochs=warmup_steps, max_epochs=total_steps)
+
                 # Call original training loop with modifications for early stopping
                 losses_train = np.zeros(args.epochs)
                 errors_train = np.zeros(args.epochs)
@@ -122,10 +137,12 @@ def create_objective_function(base_args):
                     losses_val = np.zeros(args.epochs)
                     errors_val = np.zeros(args.epochs)
                 
-                runner.net.train()
+                # runner.net.train()
                 bi = 0
                 
                 for ep in range(args.epochs):
+                    tic = time.time()
+
                     # Train one epoch
                     collect = ep >= runner.burnin
                     losses_train[ep], errors_train[ep], bi = runner.train_one_epoch(
@@ -140,6 +157,15 @@ def create_objective_function(base_args):
                         # Use test loss if no validation set
                         test_loss, test_error = runner.compute_validation_metrics(test_loader)
                         current_val_loss = test_loss
+
+                    toc = time.time()
+
+                    prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
+                    prn_str += 'loss = %.4f, prediction error = %.4f, ' % (losses_train[ep], errors_train[ep])
+                    prn_str += 'val loss = %.4f, val prediction error = %.4f, ' % (losses_val[ep], errors_val[ep])
+                    prn_str += 'lr = %.7f ' % runner.scheduler.get_last_lr()[0]
+                    prn_str += '(time: %.4f seconds)' % (toc-tic,)
+                    logger.info(prn_str)
                     
                     # Report intermediate value for pruning
                     trial.report(current_val_loss, ep)
@@ -174,12 +200,12 @@ def create_objective_function(base_args):
             # Log the error and return a high loss
             print(f"Trial {trial.number} failed with error: {str(e)}")
             return float('inf')
-        finally:
-            # Clean up temporary directory
-            try:
-                shutil.rmtree(trial_dir)
-            except:
-                pass
+        # finally:
+        #     # Clean up temporary directory
+        #     try:
+        #         shutil.rmtree(trial_dir)
+        #     except:
+        #         pass
     
     return objective
 
