@@ -32,6 +32,7 @@ parser.add_argument('--ece_num_bins', type=int, default=15, help='number of bins
 
 # other optim hparams
 parser.add_argument('--epochs', type=int, default=100, help='number of training epochs')
+parser.add_argument('--warmup_epochs', type=int, default=0, help='number of training (linear) warmup epochs')
 parser.add_argument('--batch_size', type=int, default=128, help='batch size')
 parser.add_argument('--lr', type=float, default=1e-3, help='learning rate')
 parser.add_argument('--lr_head', type=float, default=None, help='learning rate for head')

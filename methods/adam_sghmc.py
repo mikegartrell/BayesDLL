@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision
 import torch.optim.lr_scheduler
+import flash.core.optimizers
 
 import calibration
 
@@ -82,9 +83,15 @@ class Runner:
         total_steps = num_epochs * steps_per_epoch
         logger.info('Total training steps: %d' % total_steps)
 
-        self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            self.optimizer, T_max=total_steps, eta_min=1e-6
-        )
+        num_warmup_epochs = args.warmup_epochs
+        warmup_steps = num_warmup_epochs * steps_per_epoch
+        logger.info('Total warmup steps: %d' % warmup_steps)
+
+        self.scheduler = flash.core.optimizers.LinearWarmupCosineAnnealingLR(self.optimizer, warmup_epochs=warmup_steps, max_epochs=total_steps)
+
+        # self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        #     self.optimizer, T_max=total_steps, eta_min=1e-6
+        # )
        
         logger.info('Start training...')
 
