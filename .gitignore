@@ -6,3 +6,5 @@
 .DS_Store
 .python-version
 
+*.db
+*.log

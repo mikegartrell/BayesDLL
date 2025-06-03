@@ -1,6 +1,7 @@
 lightning_flash==0.8.2
 matplotlib==3.10.3
 numpy==2.2.6
+optuna==4.3.0
 Pillow==11.2.1
 scipy==1.15.3
 setuptools==75.8.0
