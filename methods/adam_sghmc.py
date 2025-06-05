@@ -252,7 +252,7 @@ class Runner:
                     self.Ninflate, self.nd
                 )
 
-                self.optimizer.step()  # update self.net (ie, theta)
+                # self.optimizer.step()  # update self.net (ie, theta)
 
                 # prediction on training
                 pred = out.data.max(dim=1)[1]
@@ -633,9 +633,9 @@ class Model(nn.Module):
                     self.momentum_buffer[pname] = v_momentum
                     self.m[pname] = m
                     self.v[pname] = v
-                    
-                    # Set gradient to momentum, for SGD optimizer to use
-                    p.grad = -v_momentum.clone()
+
+                    # Update parameters using momentum
+                    p.data.add_(v_momentum)
         
         return loss.item(), out.detach()
     
