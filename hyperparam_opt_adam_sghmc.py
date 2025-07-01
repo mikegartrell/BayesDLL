@@ -254,8 +254,9 @@ def create_objective_function(base_args, use_multiprocessing: bool = True):
                         prn_str += '(time: %.4f seconds)' % (toc-tic,)
                         logger.info(prn_str)
                     
-                    # Report intermediate value for pruning
-                    trial.report(current_val_loss, ep)
+                    # Report intermediate value less frequently to reduce database contention
+                    if ep % max(1, args.epochs // 20) == 0:  # Report ~20 times total
+                        trial.report(current_val_loss, ep)
                     
                     # Check if trial should be pruned
                     if trial.should_prune():
@@ -306,9 +307,79 @@ def create_objective_function(base_args, use_multiprocessing: bool = True):
     return objective
 
 
+def setup_storage_backend(args, logger):
+    """Setup appropriate storage backend based on configuration and scale."""
+    
+    if args.storage:
+        # User provided explicit storage URL
+        return args.storage
+    
+    if args.n_jobs == 1:
+        # Sequential execution doesn't need persistent storage
+        return None
+    
+    # Auto-select based on scale and availability
+    if args.storage_backend == 'auto':
+        if args.n_jobs <= 4:
+            backend = 'sqlite'
+        else:
+            # Try to detect available services
+            backend = 'sqlite'  # Fallback
+            
+            # Check for PostgreSQL
+            try:
+                import psycopg2
+                # Try to connect to see if PostgreSQL is available
+                # This is just a detection attempt - user should provide correct URL
+                logger.info("PostgreSQL driver available - consider using --storage_backend postgresql")
+                backend = 'postgresql'
+            except ImportError:
+                pass
+    else:
+        backend = args.storage_backend
+    
+    # Setup storage URL based on backend
+    if backend == 'sqlite':
+        sqlite_path = os.path.join(args.results_dir, "optuna_study.db")
+        storage_url = f'sqlite:///{sqlite_path}'
+        
+        if args.n_jobs > 4:
+            logger.warning(f"Using SQLite with {args.n_jobs} parallel jobs may cause performance issues.")
+            logger.warning("Consider using PostgreSQL for better performance.")
+        
+        # Configure SQLite for better concurrency
+        import sqlite3
+        try:
+            conn = sqlite3.connect(sqlite_path)
+            conn.execute('PRAGMA journal_mode=WAL;')
+            conn.execute('PRAGMA synchronous=NORMAL;')
+            conn.execute('PRAGMA busy_timeout=30000;')
+            conn.execute('PRAGMA cache_size=10000;')
+            conn.close()
+            logger.info("SQLite configured with WAL mode for better concurrency")
+        except Exception as e:
+            logger.warning(f"Could not configure SQLite optimizations: {e}")
+            
+        return storage_url
+        
+    elif backend == 'postgresql':
+        try:
+            import psycopg2
+            logger.info(f"Using PostgreSQL backend: {args.postgres_url}")
+            return args.postgres_url
+        except ImportError:
+            logger.error("PostgreSQL backend requested but psycopg2 not installed. Install with: pip install psycopg2-binary")
+            raise
+            
+    elif backend == 'none':
+        logger.warning("No storage backend - trials will not be persistent")
+        return None
+        
+    else:
+        raise ValueError(f"Unknown storage backend: {backend}")
+    
 def get_optimal_n_jobs(args) -> int:
     """Determine optimal number of parallel jobs based on available resources."""
-    
     # Get number of available devices
     n_devices = 0
     if torch.cuda.is_available():
@@ -332,7 +403,7 @@ def get_optimal_n_jobs(args) -> int:
     if hasattr(args, 'n_jobs') and args.n_jobs > 0:
         optimal_jobs = min(args.n_jobs, args.n_trials)
     
-    return optimal_jobs
+    return optimal_jobs                                                                                                                 
 
 
 def main():
@@ -367,6 +438,10 @@ def main():
     # Parallelization arguments
     parser.add_argument('--n_jobs', type=int, default=-1, help='number of parallel jobs (-1 for auto, 1 for sequential)')
     parser.add_argument('--timeout', type=int, default=3600, help='timeout per trial in seconds')
+    parser.add_argument('--storage_backend', type=str, choices=['sqlite', 'postgresql', 'none'], 
+                       default='auto', help='storage backend for parallel execution (auto, sqlite, postgresql, none)')
+    parser.add_argument('--postgres_url', type=str, default='postgresql://user:pass@localhost/optuna',
+                       help='PostgreSQL connection URL')
     
     args = parser.parse_args()
     
@@ -406,11 +481,37 @@ def main():
     
     # Create results directory
     os.makedirs(args.results_dir, exist_ok=True)
+
+    # Setup logging for main process
+    # Clear any existing handlers to avoid conflicts
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
     
-    # Set up Optuna study with database for parallel execution
-    if args.storage is None and args.n_jobs > 1:
-        # Create SQLite database for parallel trials
-        args.storage = f'sqlite:///{os.path.join(args.results_dir, "optuna_study.db")}'
+    # Create formatters
+    formatter = logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s')
+    
+    # File handler
+    file_handler = logging.FileHandler(os.path.join(args.results_dir, 'optimization.log'))
+    file_handler.setFormatter(formatter)
+    file_handler.setLevel(logging.INFO)
+    
+    # Console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    console_handler.setLevel(logging.INFO)
+    
+    # Configure root logger
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[file_handler, console_handler],
+        force=True  # Override any existing configuration
+    )
+    
+    logger = logging.getLogger('main')
+    logger.setLevel(logging.INFO)
+    
+    # Set up storage backend
+    args.storage = setup_storage_backend(args, logger)
     
     study_kwargs = {
         'direction': 'minimize',
@@ -430,17 +531,6 @@ def main():
     
     # Create objective function
     objective = create_objective_function(args, use_multiprocessing=args.n_jobs > 1)
-    
-    # Setup logging
-    logging.basicConfig(
-        handlers=[
-            logging.FileHandler(os.path.join(args.results_dir, 'optimization.log')),
-            logging.StreamHandler()
-        ],
-        format='[%(asctime)s] %(levelname)s: %(message)s',
-        level=logging.INFO
-    )
-    logger = logging.getLogger()
     
     logger.info(f"Starting Optuna optimization with {args.n_trials} trials using {args.n_jobs} parallel jobs")
     logger.info(f"Available devices: {[str(d) for d in gpu_manager.available_devices]}")
@@ -532,7 +622,6 @@ def main():
     logger.info("\nTo run with best parameters, use:")
     logger.info(f"python demo_vision.py --method adam_sghmc --lr {study.best_params['lr']:.6f} "
                 f"--hparams \"{best_hparams}\" --dataset {args.dataset} --backbone {args.backbone}")
-
 
 if __name__ == '__main__':
     main()
