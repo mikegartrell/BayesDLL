@@ -245,18 +245,17 @@ def create_objective_function(base_args, use_multiprocessing: bool = True):
 
                     toc = time.time()
 
-                    if ep % 5 == 0 or ep == args.epochs - 1:  # Log every 5 epochs to reduce output
-                        prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
-                        prn_str += 'loss = %.4f, prediction error = %.4f, ' % (losses_train[ep], errors_train[ep])
-                        if val_loader is not None:
-                            prn_str += 'val loss = %.4f, val prediction error = %.4f, ' % (losses_val[ep], errors_val[ep])
-                        prn_str += 'lr = %.7f ' % runner.scheduler.get_last_lr()[0]
-                        prn_str += '(time: %.4f seconds)' % (toc-tic,)
-                        logger.info(prn_str)
+                    # if ep % 5 == 0 or ep == args.epochs - 1:  # Log every 5 epochs to reduce output
+                    prn_str = '[Epoch %d/%d] Training summary: ' % (ep, args.epochs)
+                    prn_str += 'loss = %.4f, prediction error = %.4f, ' % (losses_train[ep], errors_train[ep])
+                    if val_loader is not None:
+                        prn_str += 'val loss = %.4f, val prediction error = %.4f, ' % (losses_val[ep], errors_val[ep])
+                    prn_str += 'lr = %.7f ' % runner.scheduler.get_last_lr()[0]
+                    prn_str += '(time: %.4f seconds)' % (toc-tic,)
+                    logger.info(prn_str)
                     
-                    # Report intermediate value less frequently to reduce database contention
-                    if ep % max(1, args.epochs // 20) == 0:  # Report ~20 times total
-                        trial.report(current_val_loss, ep)
+                    # Report intermediate value for pruning
+                    trial.report(current_val_loss, ep)
                     
                     # Check if trial should be pruned
                     if trial.should_prune():
