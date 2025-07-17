@@ -169,6 +169,13 @@ elif args.method == 'adam_sghmc':
         runner = Runner(net, net0, args, logger)
         runner.train(train_loader, val_loader, test_loader)
 
+elif args.method == 'sghmc_replusive':
+    if __name__ == '__main__':
+        from methods.sghmc_repulsive import RunnerRepulsive
+
+        runner = RunnerRepulsive(net, net0, args, logger)
+        runner.train(train_loader, val_loader, test_loader)
+
 else:
     raise NotImplementedError
 
