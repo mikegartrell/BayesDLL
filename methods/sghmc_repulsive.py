@@ -34,94 +34,101 @@ class ModelRepulsive(Model):
         # --- New flag to control adaptive sigma ---
         self.repulsive_sigma_adaptive = repulsive_sigma_adaptive
 
-    def _calculate_adaptive_sigma(self, history_samples, device):
+    def _calculate_adaptive_sigma(self, history_samples_tensor, M):
         """
         Calculates the adaptive RBF kernel bandwidth sigma = med^2 / log(M).
+        - Assumes history_samples_tensor is already on the correct device.
         """
-        M = len(history_samples)
-        # Need at least 2 samples to compute a distance
         if M < 2:
             return self.repulsive_sigma # Fallback to fixed sigma
 
-        # --- Vectorized calculation of pairwise distances ---
-        # Stack history vectors into a single tensor
-        history_tensor = torch.stack(list(history_samples)).to(device)
-
-        # Compute squared norms of each vector
-        sum_sq = torch.sum(history_tensor * history_tensor, dim=1)
+        sum_sq = torch.sum(history_samples_tensor * history_samples_tensor, dim=1)
+        pairwise_sq_dists = sum_sq.unsqueeze(1) - 2 * torch.matmul(history_samples_tensor, history_samples_tensor.t()) + sum_sq.unsqueeze(0)
         
-        # Compute pairwise squared L2 distances: ||x-y||^2 = ||x||^2 - 2<x,y> + ||y||^2
-        # This uses broadcasting to compute the distance matrix efficiently.
-        pairwise_sq_dists = sum_sq.unsqueeze(1) - 2 * torch.matmul(history_tensor, history_tensor.t()) + sum_sq.unsqueeze(0)
-        
-        # We only need the upper triangular part of the matrix (excluding the diagonal)
-        # to get the unique pairwise distances.
         triu_indices = torch.triu_indices(M, M, offset=1)
         unique_sq_dists = pairwise_sq_dists[triu_indices[0], triu_indices[1]]
-        
-        # Clamp to avoid sqrt(0) -> NaN gradients if we were ever to backprop
         unique_sq_dists = unique_sq_dists.clamp(min=1e-12)
         
-        # Median of the actual distances (not squared)
         med_dist = torch.sqrt(unique_sq_dists).median()
         med_sq = med_dist * med_dist
 
-        # log(M) can't be zero, handle M=1 case (already handled by M < 2 check)
-        # Use a small epsilon for numerical stability
-        log_M = torch.log(torch.tensor(M, dtype=torch.float32, device=device))
+        log_M = torch.log(torch.tensor(M, dtype=torch.float32, device=history_samples_tensor.device))
         
         sigma = med_sq / (log_M + 1e-8)
         return sigma.item()
+    
+    def _calculate_repulsive_force_vectorized(self, current_theta_vec, history_samples):
+        """
+        Calculates the Stein repulsive force in a fully vectorized manner.
+        """
+        M = len(history_samples)
+        device = current_theta_vec.device
+
+        # 1. Bulk Transfer: Move all history from CPU to GPU at once.
+        history_tensor = torch.stack(list(history_samples)).to(device)
+
+        # 2. Determine Sigma: Use adaptive or fixed sigma.
+        if self.repulsive_sigma_adaptive:
+            sigma = self._calculate_adaptive_sigma(history_tensor, M)
+        else:
+            sigma = self.repulsive_sigma
+        
+        # 3. Vectorized Computation of Repulsive Force
+        # Compute all differences between current and historical points via broadcasting.
+        # Shape: (1, D) - (M, D) -> (M, D)
+        diff_matrix = current_theta_vec.unsqueeze(0) - history_tensor
+
+        # Compute all squared L2 distances.
+        # Shape: (M,)
+        sq_dists = torch.sum(diff_matrix * diff_matrix, dim=1)
+
+        # Compute all RBF kernel values.
+        # Shape: (M,)
+        k_vals = torch.exp(-sq_dists / sigma)
+
+        # Compute the final force vector.
+        # grad_k = k_val * (-2 / sigma) * diff_vec
+        # We want sum(grad_k) / M
+        # This is equivalent to: (-2 / sigma) * sum(k_val * diff_vec) / M
+        
+        # Reshape k_vals to (M, 1) for broadcasting with diff_matrix (M, D)
+        # Resulting shape is (M, D), where each row is correctly scaled.
+        scaled_diffs = k_vals.unsqueeze(1) * diff_matrix
+        
+        # Sum across all historical points (dimension 0) to get the total force vector.
+        total_force = torch.sum(scaled_diffs, dim=0)
+        
+        # Apply the remaining scaling factors and average over M.
+        # Note: The (-2 / sigma) is part of the gradient calculation.
+        final_force = total_force * (-2.0 / sigma) / M
+        
+        return final_force
 
     def forward(self, x, y, net, net0, criterion, lrs, Ninflate=1.0, nd=1.0,
-                # --- New arguments for repulsion ---
                 apply_repulsion=False,
                 history_samples=None):
         
-        # --- 1. Standard SGHMC Step ---
+        # --- 1. Standard SGHMC Step (Unchanged) ---
         loss, out = super().forward(x, y, net, net0, criterion, lrs, Ninflate, nd)
 
-        # --- 2. Stein Repulsive Step ---
+        # --- 2. Stein Repulsive Step (Optimized) ---
         if apply_repulsion and history_samples and len(history_samples) > 0:
             with torch.no_grad():
-                # Get current parameter vector
                 current_theta_vec = nn.utils.parameters_to_vector(net.parameters())
                 
-                # --- Determine which sigma to use ---
-                if self.repulsive_sigma_adaptive:
-                    sigma = self._calculate_adaptive_sigma(history_samples, current_theta_vec.device)
-                else:
-                    sigma = self.repulsive_sigma
-
-                total_repulsive_force = torch.zeros_like(current_theta_vec)
-
-                # Calculate repulsive force from history
-                for past_theta_vec in history_samples:
-                    past_theta_vec = past_theta_vec.to(current_theta_vec.device)
-                    
-                    diff_vec = current_theta_vec - past_theta_vec
-                    sq_dist = torch.sum(diff_vec * diff_vec)
-                    
-                    # RBF Kernel and its gradient w.r.t. the first argument (current_theta_vec)
-                    # K(x, y) = exp(-||x-y||^2 / sigma)
-                    # grad_x K(x, y) = K(x, y) * (-2 / sigma) * (x - y)
-                    k_val = torch.exp(-sq_dist / sigma)
-                    grad_k = k_val * (-2.0 / sigma) * diff_vec
-                    
-                    total_repulsive_force += grad_k
+                ## --- OPTIMIZATION ---
+                # Call the new vectorized function instead of the slow loop.
+                repulsive_force_vec = self._calculate_repulsive_force_vectorized(
+                    current_theta_vec, history_samples
+                )
                 
-                # Average the force over all history samples
-                total_repulsive_force /= len(history_samples)
-                
-                # Get the learning rate (use the body lr as the global step size for the force)
                 lr_body = lrs[0]
-                
-                # Calculate the final repulsive update vector
-                # This corresponds to: η * α * g(θ_k; δ_k^M)
-                repulsive_update = lr_body * self.repulsive_alpha * total_repulsive_force
+                repulsive_update = lr_body * self.repulsive_alpha * repulsive_force_vec
                 
                 # Apply the update to the network parameters
-                updated_params_vec = nn.utils.parameters_to_vector(net.parameters()) + repulsive_update
+                # We add to `current_theta_vec` which is a *copy*, then load it back.
+                # This is safer than in-place modification on `net.parameters()`.
+                updated_params_vec = current_theta_vec + repulsive_update
                 nn.utils.vector_to_parameters(updated_params_vec, net.parameters())
 
         return loss, out
