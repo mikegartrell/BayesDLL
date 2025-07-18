@@ -25,7 +25,8 @@ class ModelRepulsive(Model):
     SGHMC sampler model with Stein Self-Repulsive Dynamics.
     """
     def __init__(self, ND, prior_sig=1.0, bias='informative', momentum_decay=0.05, temperature=1.0, 
-                 repulsive_alpha=1.0, repulsive_sigma=1.0, repulsive_sigma_adaptive=False):
+                 repulsive_alpha=1.0, repulsive_sigma=1.0, repulsive_sigma_adaptive=False, 
+                 repulsive_stale_steps=1):
         super().__init__(ND, prior_sig, bias, momentum_decay, temperature)
         # --- New parameters for repulsion ---
         self.repulsive_alpha = repulsive_alpha
@@ -33,6 +34,11 @@ class ModelRepulsive(Model):
 
         # --- New flag to control adaptive sigma ---
         self.repulsive_sigma_adaptive = repulsive_sigma_adaptive
+
+        # Stale force optimization parameter and state for calculation
+        self.repulsive_stale_steps = repulsive_stale_steps
+        self.stale_force_cache = None
+        self.step_counter = 0
 
     def _calculate_adaptive_sigma(self, history_samples_tensor, M):
         """
@@ -107,27 +113,36 @@ class ModelRepulsive(Model):
     def forward(self, x, y, net, net0, criterion, lrs, Ninflate=1.0, nd=1.0,
                 apply_repulsion=False,
                 history_samples=None):
-        
+        self.step_counter += 1
+
         # --- 1. Standard SGHMC Step (Unchanged) ---
         loss, out = super().forward(x, y, net, net0, criterion, lrs, Ninflate, nd)
 
         # --- 2. Stein Repulsive Step (Optimized) ---
         if apply_repulsion and history_samples and len(history_samples) > 0:
             with torch.no_grad():
-                current_theta_vec = nn.utils.parameters_to_vector(net.parameters())
-                
-                ## --- OPTIMIZATION ---
-                # Call the new vectorized function instead of the slow loop.
-                repulsive_force_vec = self._calculate_repulsive_force_vectorized(
-                    current_theta_vec, history_samples
-                )
-                
+                # Only compute the repulsive force if it's the first step or stale interval is reached.
+                if self.step_counter % self.repulsive_stale_steps == 0 or self.stale_force_cache is None:
+                    current_theta_vec = nn.utils.parameters_to_vector(net.parameters())
+                    
+                    # Call the new vectorized function
+                    repulsive_force_vec = self._calculate_repulsive_force_vectorized(
+                        current_theta_vec, history_samples
+                    )
+
+                    # Cache the computed force
+                    self.stale_force_cache = repulsive_force_vec                        
+                else:
+                    # Use the cached force
+                    repulsive_force_vec = self.stale_force_cache.to(net.parameters().__next__().device)
+
                 lr_body = lrs[0]
                 repulsive_update = lr_body * self.repulsive_alpha * repulsive_force_vec
                 
                 # Apply the update to the network parameters
                 # We add to `current_theta_vec` which is a *copy*, then load it back.
                 # This is safer than in-place modification on `net.parameters()`.
+                current_theta_vec = nn.utils.parameters_to_vector(net.parameters())
                 updated_params_vec = current_theta_vec + repulsive_update
                 nn.utils.vector_to_parameters(updated_params_vec, net.parameters())
 
@@ -156,7 +171,8 @@ class RunnerRepulsive(Runner):
             # --- Pass repulsive hyperparameters to the model ---
             repulsive_alpha=float(hparams.get('replusive_alpha', 10.0)),
             repulsive_sigma=float(hparams.get('replusive_sigma', 100.0)),
-            repulsive_sigma_adaptive=hparams.get('repulsive_sigma_adaptive', True)
+            repulsive_sigma_adaptive=hparams.get('repulsive_sigma_adaptive', True),
+            repulsive_stale_steps=int(hparams.get('repulsive_stale_steps', 1))
         ).to(args.device)
 
         # --- Attributes for managing repulsion history ---
@@ -173,6 +189,7 @@ class RunnerRepulsive(Runner):
         else:
             logger.info(f"Using FIXED kernel bandwidth sigma: {self.model.repulsive_sigma}")
         logger.info(f"Repulsion will start after {self.repulsive_burnin_steps} batch iterations.")
+        logger.info(f"Stale force calculation (every K steps): {self.model.repulsive_stale_steps}")
 
     def train_one_epoch(self, train_loader, collect, bi):
         """
