@@ -125,7 +125,8 @@ class ModelRepulsive(Model):
                 if self.step_counter % self.repulsive_stale_steps == 0 or self.stale_force_cache is None:
                     current_theta_vec = nn.utils.parameters_to_vector(net.parameters())
                     
-                    # Call the new vectorized function
+                    ## --- OPTIMIZATION ---
+                    # Call the new vectorized function instead of the slow loop.
                     repulsive_force_vec = self._calculate_repulsive_force_vectorized(
                         current_theta_vec, history_samples
                     )
@@ -169,15 +170,15 @@ class RunnerRepulsive(Runner):
             momentum_decay=float(hparams['momentum_decay']),
             temperature=float(hparams.get('temperature', 1.0)),
             # --- Pass repulsive hyperparameters to the model ---
-            repulsive_alpha=float(hparams.get('replusive_alpha', 10.0)),
-            repulsive_sigma=float(hparams.get('replusive_sigma', 100.0)),
+            repulsive_alpha=float(hparams.get('repulsive_alpha', 10.0)),
+            repulsive_sigma=float(hparams.get('repulsive_sigma', 100.0)),
             repulsive_sigma_adaptive=hparams.get('repulsive_sigma_adaptive', True),
             repulsive_stale_steps=int(hparams.get('repulsive_stale_steps', 1))
         ).to(args.device)
 
         # --- Attributes for managing repulsion history ---
-        self.repulsive_M = int(hparams.get('replusive_M', 10))
-        self.repulsive_thinning = int(hparams.get('replusive_thinning', 100))
+        self.repulsive_M = int(hparams.get('repulsive_M', 10))
+        self.repulsive_thinning = int(hparams.get('repulsive_thinning', 100))
         self.repulsive_burnin_steps = self.repulsive_M * self.repulsive_thinning
         
         # Use a deque to automatically manage the history size
@@ -189,7 +190,7 @@ class RunnerRepulsive(Runner):
         else:
             logger.info(f"Using FIXED kernel bandwidth sigma: {self.model.repulsive_sigma}")
         logger.info(f"Repulsion will start after {self.repulsive_burnin_steps} batch iterations.")
-        logger.info(f"Stale force calculation (every K steps): {self.model.repulsive_stale_steps}")
+        logger.info(f"Stale Force Calculation (every K steps): {self.model.repulsive_stale_steps}")
 
     def train_one_epoch(self, train_loader, collect, bi):
         """
