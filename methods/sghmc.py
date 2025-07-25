@@ -572,8 +572,8 @@ class Model(nn.Module):
                         # Scale both prior and likelihood gradients by 1/T
                         grad_U = (p.grad + (p - p0) / (self.prior_sig**2) / N) / T  # Prior + likelihood gradient
                     
-                     # Scale noise by sqrt(1/T) to maintain proper sampling from cold posterior
-                    noise_scale = nd * np.sqrt(2 * self.momentum_decay / (N * lr * T))
+                    # Scale noise by sqrt(1/T) to maintain proper sampling from cold posterior
+                    noise_scale = nd * np.sqrt(2 * lr * self.momentum_decay * T / N)
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using SGHMC update rule

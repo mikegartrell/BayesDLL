@@ -623,7 +623,7 @@ class Model(nn.Module):
                     # Noise term for SGHMC with preconditioning and temperature scaling
                     precond_term = 1.0 / (torch.sqrt(v_hat) + self.epsilon)
                     # Scale noise by sqrt(1/T) to maintain proper sampling from cold posterior
-                    noise_scale = nd * torch.sqrt(2 * self.momentum_decay * precond_term / (N * T))
+                    noise_scale = nd * np.sqrt(2 * self.momentum_decay * lr * T / N) * precond_term
                     noise = noise_scale * torch.randn_like(p)
                     
                     # Update momentum (v) using Adam-SGHMC update rule
